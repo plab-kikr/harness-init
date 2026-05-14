@@ -121,7 +121,9 @@ my-project/
 
 ## Hooks — 자동 알림
 
-`init.sh` 설치 시 `.claude/hooks/`와 `settings.json`에 PostToolUse 훅이 구성됩니다.
+`init.sh` 설치 시 두 계층의 훅이 구성됩니다.
+
+### 프로젝트 훅 (`.claude/hooks/`)
 
 | 훅 파일 | 트리거 | 동작 |
 |--------|--------|------|
@@ -129,6 +131,76 @@ my-project/
 | `insight-collector.sh` | Bash / Edit / Write 후 | Claude 응답의 `★ Insight` 블록을 감지해 `.claude/insights.md`에 자동 저장 |
 
 훅은 `git diff --name-only HEAD`로 변경 파일을 감지합니다. 프로젝트별 훅을 추가하려면 `.claude/hooks/`에 `.sh` 파일을 추가하고 `settings.json`의 `hooks` 섹션에 등록하세요.
+
+### 전역 훅 (`~/.claude/hooks/`)
+
+`init.sh`는 `~/.claude/hooks/`에 전역 훅도 설치합니다. 이 훅은 모든 프로젝트 세션에 적용됩니다.
+
+| 훅 파일 | 이벤트 | 동작 |
+|--------|--------|------|
+| `session-stop.sh` | Stop | 세션 종료 시 `~/.claude/debriefs/`에 메타데이터 기록. Claude가 debrief를 작성했으면 git 스냅샷 추가 |
+| `session-start-context.sh` | SessionStart | `~/.claude/debrief-guardrails.md` + `$PWD/.claude/debrief-guardrails.md`를 읽어 `[PAST SESSION LESSONS]` 블록으로 컨텍스트 주입 |
+
+---
+
+## 자기강화 루프 (Self-Reinforcement Loop)
+
+`init.sh`는 Claude가 세션 간에 자신의 실수와 교훈을 기억하는 **자기강화 루프**를 전역으로 설치합니다.
+
+### 작동 원리
+
+```
+세션 종료 (Stop hook)
+  → ~/.claude/debriefs/YYYY-MM-DD-session-log.md  ← 브랜치·커밋·변경 파일 자동 기록
+  → (Claude가 debrief 파일 작성 시) git 스냅샷 추가
+
+다음 세션 시작 (SessionStart hook)
+  → ~/.claude/debrief-guardrails.md 읽기         ← 전역 교훈 (모든 프로젝트 공통)
+  → $PWD/.claude/debrief-guardrails.md 읽기      ← 프로젝트 교훈 (해당 프로젝트만)
+  → [PAST SESSION LESSONS] 블록으로 Claude 컨텍스트에 주입
+```
+
+### 두 계층 가드레일
+
+| 파일 | 범위 | 내용 |
+|------|------|------|
+| `~/.claude/debrief-guardrails.md` | 전역 (모든 프로젝트) | 확인 우선 원칙, 타입 안전성 규칙, AI 리뷰 검증 방법 등 보편적 교훈 |
+| `.claude/debrief-guardrails.md` | 프로젝트별 | 도메인 ID 혼동 주의, 코드베이스 특화 패턴, 반복 실수 히스토리 |
+
+### 설치 후 파일 구조
+
+```
+~/.claude/
+├── debrief-guardrails.md          ← 전역 교훈 누적 (init.sh가 초기 시드 생성)
+├── hooks/
+│   ├── session-stop.sh            ← 세션 종료 기록 훅
+│   └── session-start-context.sh  ← 세션 시작 컨텍스트 주입 훅
+└── debriefs/
+    ├── YYYY-MM-DD-session-log.md  ← 자동 기록 (Stop 훅)
+    └── YYYY-MM-DD-debrief.md      ← Claude가 직접 작성하는 세션 debrief
+
+my-project/
+└── .claude/
+    └── debrief-guardrails.md      ← 프로젝트 교훈 누적 (init.sh가 PROJECT_NAME 치환)
+```
+
+### 교훈 누적 방법
+
+**전역 교훈** (`~/.claude/debrief-guardrails.md`에 추가):
+```markdown
+## 섹션명
+
+- [교훈 내용] — [근거 또는 발생 배경]
+```
+
+**프로젝트 교훈** (`.claude/debrief-guardrails.md`의 반복 실수 히스토리에 추가):
+```markdown
+## 반복 실수 히스토리
+
+- YYYY-MM-DD: [실수 내용] → [올바른 접근]
+```
+
+같은 실수가 2회 이상 반복되면 해당 섹션으로 승격해 클래스화합니다.
 
 ### Insight 자동 수집
 
@@ -254,8 +326,15 @@ cp .claude/decisions/adr-template.md .claude/decisions/001-auth-strategy.md
 ```
 harness-init/
 ├── README.md
+├── CLAUDE.md                     ← harness-init 자체 개발 가이드
 ├── init.sh                       ← 메인 실행 스크립트
 ├── templates/
+│   ├── base/                     ← 스택 무관 전역 공통 파일
+│   │   ├── debrief-guardrails.md          ← 전역 가드레일 초기 시드
+│   │   ├── project-debrief-guardrails.md  ← 프로젝트 가드레일 템플릿 ({{PROJECT_NAME}} placeholder)
+│   │   └── hooks/
+│   │       ├── session-stop.sh            ← 세션 종료 기록 훅
+│   │       └── session-start-context.sh  ← 세션 시작 컨텍스트 주입 훅
 │   └── django/                   ← harness 템플릿 (타 스택으로 자동 마이그레이션)
 │       ├── CLAUDE.md
 │       ├── .claude/
