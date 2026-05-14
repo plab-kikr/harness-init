@@ -89,6 +89,15 @@ else
   warn ".claude/settings.json 이미 존재, 건너뜀"
 fi
 
+# project debrief-guardrails 생성 (없을 때만, 스택 무관)
+PROJECT_NAME=$(basename "$TARGET_DIR")
+if [ ! -f "$TARGET_DIR/.claude/debrief-guardrails.md" ]; then
+  sed "s/{{PROJECT_NAME}}/$PROJECT_NAME/" \
+    "$TEMPLATE_DIR/base/project-debrief-guardrails.md" \
+    > "$TARGET_DIR/.claude/debrief-guardrails.md"
+  success "debrief-guardrails.md 생성 완료 (.claude/)"
+fi
+
 # .gemini 복사
 if [ -d "$TEMPLATE_DIR/django/.gemini" ]; then
   mkdir -p "$TARGET_DIR/.gemini"
@@ -217,6 +226,75 @@ EXISTING_MODELS=$(find "$TARGET_DIR" -name "models.py" \
 if ! IS_JS_ENV && [ -n "$EXISTING_MODELS" ]; then
   info "기존 Django 앱 감지 — DOMAIN.md 스켈레톤 생성 중..."
   bash "$SCRIPT_DIR/scripts/domain-init.sh" "$TARGET_DIR"
+fi
+
+# ── 전역 자기강화 루프 설정 (~/.claude) ────────────────
+info "전역 자기강화 루프 설정 중..."
+
+GLOBAL_CLAUDE="$HOME/.claude"
+GLOBAL_HOOKS="$GLOBAL_CLAUDE/hooks"
+GLOBAL_DEBRIEFS="$GLOBAL_CLAUDE/debriefs"
+
+mkdir -p "$GLOBAL_HOOKS" "$GLOBAL_DEBRIEFS"
+
+# 훅 스크립트 복사 (기존 파일 덮어쓰지 않음)
+cp -n "$TEMPLATE_DIR/base/hooks/session-stop.sh" \
+  "$GLOBAL_HOOKS/session-stop.sh" 2>/dev/null || true
+cp -n "$TEMPLATE_DIR/base/hooks/session-start-context.sh" \
+  "$GLOBAL_HOOKS/session-start-context.sh" 2>/dev/null || true
+chmod +x "$GLOBAL_HOOKS/session-stop.sh" \
+         "$GLOBAL_HOOKS/session-start-context.sh" 2>/dev/null || true
+
+# 전역 debrief-guardrails 생성 (없을 때만)
+if [ ! -f "$GLOBAL_CLAUDE/debrief-guardrails.md" ]; then
+  cp "$TEMPLATE_DIR/base/debrief-guardrails.md" \
+    "$GLOBAL_CLAUDE/debrief-guardrails.md"
+  success "debrief-guardrails.md 생성 완료 (~/.claude/)"
+fi
+
+# ~/.claude/settings.json에 훅 등록 (python3 사용, 기존 항목 중복 방지)
+GLOBAL_SETTINGS="$GLOBAL_CLAUDE/settings.json"
+if [ -f "$GLOBAL_SETTINGS" ]; then
+  python3 - "$GLOBAL_SETTINGS" << 'PYEOF'
+import json, sys, os
+
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        s = json.load(f)
+    if not isinstance(s, dict):
+        s = {}
+except (json.JSONDecodeError, ValueError):
+    s = {}
+
+hooks = s.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    hooks = {}
+    s["hooks"] = hooks
+
+def ensure_hook(key, cmd, timeout):
+    entries = hooks.get(key)
+    if not isinstance(entries, list):
+        entries = [{"hooks": []}]
+        hooks[key] = entries
+    existing = [h.get("command") for e in entries if isinstance(e, dict) for h in e.get("hooks", []) if isinstance(h, dict)]
+    if cmd not in existing:
+        if not entries or not isinstance(entries[0], dict):
+            entries.insert(0, {"hooks": []})
+        entries[0].setdefault("hooks", []).append({"type": "command", "command": cmd, "timeout": timeout})
+
+home = os.path.expanduser("~")
+ensure_hook("Stop",         f"{home}/.claude/hooks/session-stop.sh",          10)
+ensure_hook("SessionStart", f"{home}/.claude/hooks/session-start-context.sh",  5)
+
+with open(path, "w") as f:
+    json.dump(s, f, indent=2, ensure_ascii=False)
+PYEOF
+  success "~/.claude/settings.json 훅 등록 완료"
+else
+  warn "~/.claude/settings.json 없음 — 훅을 수동으로 등록하세요"
+  warn "  Stop:         ~/.claude/hooks/session-stop.sh"
+  warn "  SessionStart: ~/.claude/hooks/session-start-context.sh"
 fi
 
 # ── 완료 메시지 ────────────────────────────────────────
