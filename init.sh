@@ -103,8 +103,13 @@ _inject_lsp_python() {
   python3 - "$SETTINGS_FILE" << 'PYEOF'
 import json, sys
 path = sys.argv[1]
-with open(path) as f:
-    s = json.load(f)
+try:
+    with open(path) as f:
+        s = json.load(f)
+    if not isinstance(s, dict):
+        s = {}
+except Exception:
+    s = {}
 if "python" not in s.setdefault("lsp", {}):
     s["lsp"]["python"] = {"command": "pylsp"}
     with open(path, "w") as f:
@@ -116,9 +121,16 @@ _inject_lsp_js() {
   python3 - "$SETTINGS_FILE" << 'PYEOF'
 import json, sys
 path = sys.argv[1]
-with open(path) as f:
-    s = json.load(f)
+try:
+    with open(path) as f:
+        s = json.load(f)
+    if not isinstance(s, dict):
+        s = {}
+except Exception:
+    s = {}
 lsp = s.setdefault("lsp", {})
+if not isinstance(lsp, dict):
+    lsp = s["lsp"] = {}
 if "typescript" not in lsp or "javascript" not in lsp:
     lsp.update({
         "typescript": {"command": "typescript-language-server", "args": ["--stdio"]},
